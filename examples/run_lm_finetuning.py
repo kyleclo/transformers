@@ -86,7 +86,7 @@ class TextDataset(Dataset):
                 tokenized_text = mp.map(tokenizer.tokenize, tqdm(batches))
                 #flatten = lambda l: [item for sublist in l for item in sublist]
                 tokenized_text = mp.map(tokenizer.convert_tokens_to_ids, tokenized_text)
-                tokenized_text = itertools.chain.from_iterable(tokenized_text)
+                tokenized_text = list(itertools.chain.from_iterable(tokenized_text))
             end = time.time()
             logging.info('Time to tokenize text: {} min'.format((end - start) / 60))
 
@@ -100,7 +100,7 @@ class TextDataset(Dataset):
                     self.examples.append(example)
             else:
                 for i in tqdm(range(0, len(tokenized_text) - block_size + 1, block_size)):  # Truncate in block of block_size
-                    self.examples.append(tokenizer.build_inputs_with_special_tokens(tokenized_text[i:i + block_size]))
+                    self.examples.append(tokenized_text[i:i + block_size])
             # Note that we are loosing the last truncated example here for the sake of simplicity (no padding)
             # If your dataset is small, first you should loook for a bigger one :-) and second you
             # can change this behavior by adding (model specific) padding.
