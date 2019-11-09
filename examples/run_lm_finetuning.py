@@ -95,12 +95,14 @@ class TextDataset(Dataset):
             for file_path in train_files:
                 with open(file_path, encoding="utf-8") as f:
                     batches.extend(f.readlines())
-            self.sep_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('<|TLDR|>'))
+            self.sep_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('<|SEP|>'))
             self.end_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('<|endoftext|>'))
             self.padding = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('<|PAD|>'))[0]
 
             if args.num_cores == -1:
                 num_cores = multiprocessing.cpu_count() - 2
+            else:
+                num_cores = args.num_cores
 
             start = time.time()
             with multiprocessing.Pool(num_cores) as mp:
@@ -526,7 +528,7 @@ def main(args):
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
-    tokenizer.add_special_tokens({"additional_special_tokens": ["<|TLDR|>", '<|PAD|>']})
+    tokenizer.add_special_tokens({"additional_special_tokens": ["<|SEP|>", '<|PAD|>', '<|CITE|>']})
     if args.block_size <= 0:
         args.block_size = tokenizer.max_len_single_sentence  # Our input block size will be the max possible for the model
     args.block_size = min(args.block_size, tokenizer.max_len_single_sentence)
