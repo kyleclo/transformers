@@ -150,8 +150,11 @@ class TextDataset(Dataset):
 
         return i+max_idx+len_end, example
 
-def load_and_cache_examples(args, tokenizer, evaluate=False):
-    dataset = TextDataset(tokenizer, args, args.eval_data_path if evaluate else args.train_data_path)
+def load_and_cache_examples(args, tokenizer, evaluate=False, fpath=None):
+    if fpath:
+        dataset = TextDataset(tokenizer, args, fpath)
+    else:
+        dataset = TextDataset(tokenizer, args, args.eval_data_path if evaluate else args.train_data_path)
 
     # Ignore incomplete batches
     # If you don't do this, you'll get an error at the end of training
@@ -340,15 +343,12 @@ def evaluate(args, model, tokenizer, prefix=""):
     logger.info("***** Running evaluation {} *****".format(prefix))
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    eval_loss = 0.0
+    eval_loss = torch.Tensor([0.0]).to(args.device)
     nb_eval_steps = 0
     model.eval()
-    
-    if args.local_rank in [-1, 0]:
-        iterator = enumerate(tqdm(eval_dataloader, desc=f"Rank {args.local_rank}: Evaluating", total=n_eval))
-        
-    else:
-        iterator = enumerate(eval_dataloader)
+
+    iterator = enumerate(tqdm(eval_dataloader, desc=f"Evaluating", total=n_eval)) \
+        if args.local_rank in [-1, 0] else enumerate(eval_dataloader)
         
     for idx, batch in iterator:
         batch = batch.to(args.device)
@@ -357,15 +357,12 @@ def evaluate(args, model, tokenizer, prefix=""):
         with torch.no_grad():
             outputs = model(batch, masked_lm_labels=batch) if args.mlm else model(batch, labels=batch)
             lm_loss = outputs[0]
-            eval_loss += lm_loss.mean().item()
+            eval_loss += lm_loss.mean()
         nb_eval_steps += 1
     eval_loss = eval_loss / nb_eval_steps
 
-#     if args.local_rank != -1:
-#         total_loss = eval_loss.new_zeros(1) + total_loss
-#         torch.distributed.all_reduce(total_loss, op=torch.distributed.reduce_op.SUM)
-#         total_loss = total_loss.item()
-#         eval_loss = total_loss / torch.distributed.get_world_size()
+    torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
+    eval_loss = eval_loss.item() / torch.distributed.get_world_size()
 
     perplexity = torch.exp(torch.tensor(eval_loss))
 
@@ -380,7 +377,7 @@ def evaluate(args, model, tokenizer, prefix=""):
         for key in sorted(result.keys()):
             logger.info("  %s = %s", key, str(result[key]))
             writer.write("%s = %s\n" % (key, str(result[key])))
-    
+
     return result
 
 
@@ -479,6 +476,7 @@ def main(args):
 
     parser.add_argument('--tldr', action='store_true', default=False, help='For tldr task')
     parser.add_argument('--num_cores', default=-1, type=int, help='Num CPUs for data processing')
+    parser.add_argument('--run_caching', action='append', default=[])
 
     args = parser.parse_args(args)
 
@@ -539,6 +537,11 @@ def main(args):
         torch.distributed.barrier()  # End of barrier to make sure only the first process in distributed training download model & vocab
 
     logger.info("Training/evaluation parameters %s", args)
+
+    # Caching
+    if args.run_caching:
+        for f in args.run_caching:
+            load_and_cache_examples(args, tokenizer, fpath=f)
 
     # Training
     if args.do_train:
