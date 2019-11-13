@@ -361,8 +361,11 @@ def evaluate(args, model, tokenizer, prefix=""):
         nb_eval_steps += 1
     eval_loss = eval_loss / nb_eval_steps
 
-    torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
-    eval_loss = eval_loss.item() / torch.distributed.get_world_size()
+    if args.local_rank == -1:
+        eval_loss = eval_loss.item()
+    else:
+        torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
+        eval_loss = eval_loss.item() / torch.distributed.get_world_size()
 
     perplexity = torch.exp(torch.tensor(eval_loss))
 
