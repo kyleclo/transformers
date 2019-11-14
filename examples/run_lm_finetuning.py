@@ -280,72 +280,69 @@ def train(args, train_dataset, model, tokenizer):
     for epoch_idx in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0], initial=step)
         for step, batch in enumerate(epoch_iterator):
-            if step < 0:
-                pass
+            inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
+            inputs = inputs.to(args.device)
+            labels = labels.to(args.device)
+            model.train()
+            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+            loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+
+            if args.n_gpu > 1:
+                loss = loss.mean()  # mean() to average on multi-gpu parallel training
+            if args.gradient_accumulation_steps > 1:
+                loss = loss / args.gradient_accumulation_steps
+
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
             else:
-                inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
-                inputs = inputs.to(args.device)
-                labels = labels.to(args.device)
-                model.train()
-                outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
-                loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+                loss.backward()
 
-                if args.n_gpu > 1:
-                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
-                if args.gradient_accumulation_steps > 1:
-                    loss = loss / args.gradient_accumulation_steps
-
+            tr_loss += loss.item()
+            if step % args.gradient_accumulation_steps == 0 and step != 0:
                 if args.fp16:
-                    with amp.scale_loss(loss, optimizer) as scaled_loss:
-                        scaled_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                 else:
-                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                optimizer.step()
+                scheduler.step()  # Update learning rate schedule
+                model.zero_grad()
+                global_step += 1
 
-                tr_loss += loss.item()
-                if step % args.gradient_accumulation_steps == 0 and step != 0:
-                    if args.fp16:
-                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
-                    else:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                    optimizer.step()
-                    scheduler.step()  # Update learning rate schedule
-                    model.zero_grad()
-                    global_step += 1
-
-                    # Log metrics
-                    if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                        tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
-                        tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
-                        logging_loss = tr_loss
-                    # Log evaluation
+                # Log metrics
+                if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                    tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
+                    tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
+                    logging_loss = tr_loss
                 
-                    if args.evaluate_during_training and \
-                            global_step % args.evaluation_steps == 0:
-                        #check_memory(desc="Before eval")
-                        results = evaluate(args, model, tokenizer)
-                        #check_memory(desc="After eval")
-                        if args.local_rank in [-1, 0]:
-                            for key, value in results.items():
-                                tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
+                # Log evaluation
+                if args.evaluate_during_training and \
+                        global_step % args.evaluation_steps == 0:
+                    #check_memory(desc="Before eval")
+                    results = evaluate(args, model, tokenizer)
+                    #check_memory(desc="After eval")
+                    if args.local_rank in [-1, 0]:
+                        for key, value in results.items():
+                            tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
 
-                    if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                        # Save model checkpoint
-                        output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                        if not os.path.exists(output_dir):
-                            os.makedirs(output_dir)
-                        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-                        model_to_save.save_pretrained(output_dir)
-                        torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                        torch.save({
-                            'epoch': epoch_idx,
-                            'step': step,
-                            'global_step': global_step,
-                            'optimizer_state_dict': optimizer.state_dict(),
-                            'scheduler_state_dict': scheduler.state_dict(),
-                            'tr_loss': tr_loss,
-                            'logging_loss': logging_loss,
-                            }, os.path.join(output_dir, 'optim_state.bin'))
-                        logger.info("Saving model checkpoint to %s", output_dir)
+                if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                    # Save model checkpoint
+                    output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
+                    if not os.path.exists(output_dir):
+                        os.makedirs(output_dir)
+                    model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+                    model_to_save.save_pretrained(output_dir)
+                    torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                    torch.save({
+                        'epoch': epoch_idx,
+                        'step': step,
+                        'global_step': global_step,
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict(),
+                        'tr_loss': tr_loss,
+                        'logging_loss': logging_loss,
+                        }, os.path.join(output_dir, 'optim_state.bin'))
+                    logger.info("Saving model checkpoint to %s", output_dir)
 
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
@@ -427,9 +424,12 @@ def evaluate(args, model, tokenizer, prefix=""):
 
     del eval_dataset
 
+<<<<<<< HEAD
     #check_memory(desc="End of eval func")
 
     
+=======
+>>>>>>> 11966712dd70ce543edb7c5a08bfa291f389d3d5
     return result
 
 
