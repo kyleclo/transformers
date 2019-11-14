@@ -431,6 +431,7 @@ def evaluate(args, model, tokenizer, prefix=""):
             writer.write("%s = %s\n" % (key, str(result[key])))
 
     del eval_dataset
+    return result
 
 
 def main(args):
