@@ -153,13 +153,23 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, fpath=None):
     if fpath:
         dataset = TextDataset(tokenizer, args, fpath)
     else:
-        dataset = TextDataset(tokenizer, args, args.eval_data_path if evaluate else args.train_data_path)
+        dataset = TextDataset(tokenizer, args, 
+        args.eval_data_path if evaluate else args.train_data_path)
 
     # Ignore incomplete batches
     # If you don't do this, you'll get an error at the end of training
-    n = len(dataset) % args.per_gpu_train_batch_size
-    if n != 0:
-        dataset.examples = dataset.examples[:-n]
+    if not evaluate:
+        n = len(dataset) % args.per_gpu_train_batch_size
+        if n != 0:
+            dataset.examples = dataset.examples[:-n]
+    # Evaluate data
+    else:
+        if args.max_eval_steps > 0:
+            dataset.examples = dataset.examples[:args.max_eval_steps]
+        n = len(dataset) % args.per_gpu_eval_batch_size
+        if n != 0:
+            dataset.examples = dataset.examples[:-n]
+
     return dataset
 
 
@@ -214,7 +224,7 @@ def train(args, train_dataset, model, tokenizer):
 
     model.resize_token_embeddings(len(tokenizer))
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_sampler = SequentialSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     if args.max_steps > 0:
@@ -237,19 +247,20 @@ def train(args, train_dataset, model, tokenizer):
     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
 
     init_epoch = 0
-    step, global_step = 0, 0
+    init_step, global_step = 0, 0
     tr_loss, logging_loss = 0.0, 0.0
 
     if args.resume_optimizer:
-        if os.path.exists(os.path.join(args.model_name_or_path, 'optim_state.bin')):
-            ckpt = torch.load(os.path.join(args.model_name_or_path, 'optim_state.bin'), map_location='cpu')
-            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-            init_epoch = ckpt['epoch']
-            step, global_step = ckpt['step'], ckpt['global_step']
-            tr_loss, logging_loss = ckpt['tr_loss'], ckpt['logging_loss']
-        else:
-            logger.warning('optimizer state not found.')
+            if os.path.exists(os.path.join(args.model_name_or_path, 'optim_state.bin')):
+                ckpt = torch.load(os.path.join(args.model_name_or_path, 'optim_state.bin'), map_location='cpu')
+                optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                init_epoch = ckpt['epoch']
+                init_step, global_step = ckpt['step'], ckpt['global_step']
+                tr_loss, logging_loss = ckpt['tr_loss'], ckpt['logging_loss']
+                train_dataset = train_dataset[init_step:]
+            else:
+                logger.warning('optimizer state not found.')
 
     if args.fp16:
         try:
@@ -280,12 +291,14 @@ def train(args, train_dataset, model, tokenizer):
     logger.info("  Total optimization steps = %d", t_total)
 
     model.zero_grad()
-    train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
-                            initial=init_epoch)
+
+    train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0], initial=init_epoch)
     set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
+    
     for epoch_idx in train_iterator:
-        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0], initial=step)
-        for step, batch in enumerate(epoch_iterator):
+        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0], initial=init_step)
+        for step, batch in enumerate(epoch_iterator, start=init_step):
+
             inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
@@ -310,6 +323,7 @@ def train(args, train_dataset, model, tokenizer):
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
@@ -318,15 +332,13 @@ def train(args, train_dataset, model, tokenizer):
                 # Log metrics
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
                     tb_writer.add_scalar('lr', scheduler.get_lr()[0], global_step)
-                    tb_writer.add_scalar('loss', (tr_loss - logging_loss) / args.logging_steps, global_step)
+                    tb_writer.add_scalar('loss', (tr_loss - logging_loss)/args.logging_steps, global_step)
                     logging_loss = tr_loss
-
+                
                 # Log evaluation
-                if args.evaluate_during_training and \
-                        global_step % args.evaluation_steps == 0:
-                    # check_memory(desc="Before eval")
+                if args.evaluate_during_training and global_step % args.evaluation_steps == 0:
                     results = evaluate(args, model, tokenizer)
-                    # check_memory(desc="After eval")
+
                     if args.local_rank in [-1, 0]:
                         for key, value in results.items():
                             tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
@@ -336,8 +348,8 @@ def train(args, train_dataset, model, tokenizer):
                     output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
-                    model_to_save = model.module if hasattr(model,
-                                                            'module') else model  # Take care of distributed/parallel training
+
+                    model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
                     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                     torch.save({
@@ -364,7 +376,6 @@ def train(args, train_dataset, model, tokenizer):
     return global_step, tr_loss / global_step
 
 
-# @profile(precision=4)
 def evaluate(args, model, tokenizer, prefix=""):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
@@ -383,9 +394,7 @@ def evaluate(args, model, tokenizer, prefix=""):
     eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
     n_eval = len(eval_dataloader.dataset)
-
-    if max_steps > 0:
-        n_eval = min(max_steps, n_eval)
+    
     # Eval!
     logger.info("***** Running evaluation {} *****".format(prefix))
     logger.info("  Num examples = %d", len(eval_dataset))
@@ -397,16 +406,13 @@ def evaluate(args, model, tokenizer, prefix=""):
     iterator = enumerate(tqdm(eval_dataloader, desc=f"Evaluating", total=n_eval)) \
         if args.local_rank in [-1, 0] else enumerate(eval_dataloader)
 
-    # check_memory(desc="Before running eval steps")
     for idx, batch in iterator:
         batch = batch.to(args.device)
-        if idx == max_steps:
-            break
         with torch.no_grad():
             outputs = model(batch, masked_lm_labels=batch) if args.mlm else model(batch, labels=batch)
             lm_loss = outputs[0]
             eval_loss += lm_loss.mean()
-        nb_eval_steps += 1
+            nb_eval_steps += 1
     eval_loss = eval_loss / nb_eval_steps
 
     if args.local_rank == -1:
@@ -414,7 +420,6 @@ def evaluate(args, model, tokenizer, prefix=""):
     else:
         torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
         eval_loss = eval_loss.item() / torch.distributed.get_world_size()
-
 
     perplexity = torch.exp(torch.tensor(eval_loss)).item()
 
@@ -430,7 +435,6 @@ def evaluate(args, model, tokenizer, prefix=""):
             logger.info("  %s = %s", key, str(result[key]))
             writer.write("%s = %s\n" % (key, str(result[key])))
 
-    del eval_dataset
     return result
 
 
