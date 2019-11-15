@@ -151,13 +151,23 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, fpath=None):
     if fpath:
         dataset = TextDataset(tokenizer, args, fpath)
     else:
-        dataset = TextDataset(tokenizer, args, args.eval_data_path if evaluate else args.train_data_path)
+        dataset = TextDataset(tokenizer, args, 
+        args.eval_data_path if evaluate else args.train_data_path)
 
     # Ignore incomplete batches
     # If you don't do this, you'll get an error at the end of training
-    n = len(dataset) % args.per_gpu_train_batch_size
-    if n != 0:
-        dataset.examples = dataset.examples[:-n]
+    if not evaluate:
+        n = len(dataset) % args.per_gpu_train_batch_size
+        if n != 0:
+            dataset.examples = dataset.examples[:-n]
+    # Evaluate data
+    else:
+        if args.max_eval_steps > 0:
+            dataset.examples = dataset.examples[:args.max_eval_steps]
+        n = len(dataset) % args.per_gpu_eval_batch_size
+        if n != 0:
+            dataset.examples = dataset.examples[:-n]
+
     return dataset
 
 
@@ -211,8 +221,8 @@ def train(args, train_dataset, model, tokenizer):
 
     model.resize_token_embeddings(len(tokenizer))
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+    train_sampler = SequentialSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, shuffle=False)
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -233,7 +243,7 @@ def train(args, train_dataset, model, tokenizer):
     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
 
     init_epoch = 0
-    step, global_step = 0, 0
+    init_step, global_step = 0, 0
     tr_loss, logging_loss = 0.0, 0.0
 
     if args.resume_optimizer:
@@ -242,11 +252,15 @@ def train(args, train_dataset, model, tokenizer):
                 optimizer.load_state_dict(ckpt['optimizer_state_dict'])
                 scheduler.load_state_dict(ckpt['scheduler_state_dict'])
                 init_epoch = ckpt['epoch']
-                step, global_step = ckpt['step'], ckpt['global_step']
+                init_step, global_step = ckpt['step'], ckpt['global_step']
                 tr_loss, logging_loss = ckpt['tr_loss'], ckpt['logging_loss']
+                train_dataset = train_dataset[init_step:]
             else:
                 logger.warning('optimizer state not found.')
-        
+    
+    print(init_epoch, init_step, global_step)
+    print(tr_loss, logging_loss)
+
     if args.fp16:
         try:
             from apex import amp
@@ -278,8 +292,8 @@ def train(args, train_dataset, model, tokenizer):
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0], initial=init_epoch)
     set_seed(args)  # Added here for reproducibility (even between python 2 and 3)
     for epoch_idx in train_iterator:
-        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0], initial=step)
-        for step, batch in enumerate(epoch_iterator):
+        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0], initial=init_step)
+        for step, batch in enumerate(epoch_iterator, start=init_step):
             inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
@@ -304,10 +318,18 @@ def train(args, train_dataset, model, tokenizer):
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+                # if args.local_rank == 0:
+                    # print(f'Before step: {scheduler.get_lr()}, {scheduler.step}')
+
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
+
+                # if args.local_rank == 0:
+                    # print(f'After step: {scheduler.get_lr()}, {scheduler.step}')
+
 
                 # Log metrics
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -333,6 +355,7 @@ def train(args, train_dataset, model, tokenizer):
                     model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
                     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                    print(f'STEP {step}')
                     torch.save({
                         'epoch': epoch_idx,
                         'step': step,
@@ -376,8 +399,10 @@ def evaluate(args, model, tokenizer, prefix=""):
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
     n_eval = len(eval_dataloader.dataset)
 
-    if max_steps > 0:
-        n_eval = min(max_steps, n_eval)
+    # if max_steps > 0:
+    #     n_eval = min(max_steps, n_eval)
+    #     # eval_dataset = eval_dataset[:n_eval]
+    
     # Eval!
     logger.info("***** Running evaluation {} *****".format(prefix))
     logger.info("  Num examples = %d", len(eval_dataset))
@@ -392,19 +417,21 @@ def evaluate(args, model, tokenizer, prefix=""):
     #check_memory(desc="Before running eval steps")
     for idx, batch in iterator:
         batch = batch.to(args.device)
-        if idx == max_steps:
-            break
         with torch.no_grad():
             outputs = model(batch, masked_lm_labels=batch) if args.mlm else model(batch, labels=batch)
             lm_loss = outputs[0]
             eval_loss += lm_loss.mean()
-        nb_eval_steps += 1
+            nb_eval_steps += 1
     eval_loss = eval_loss / nb_eval_steps
 
     #check_memory(desc="After running eval steps")
 
-    torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
-    eval_loss = eval_loss.item() / torch.distributed.get_world_size()
+    if args.local_rank == -1:
+        eval_loss = eval_loss.item()
+    else:
+        torch.distributed.all_reduce(eval_loss, op=torch.distributed.reduce_op.SUM)
+        eval_loss = eval_loss.item() / torch.distributed.get_world_size()
+
 
     #check_memory(desc="After distr")
 
@@ -422,14 +449,12 @@ def evaluate(args, model, tokenizer, prefix=""):
             logger.info("  %s = %s", key, str(result[key]))
             writer.write("%s = %s\n" % (key, str(result[key])))
 
-    del eval_dataset
+    del eval_dataset 
+    del eval_sampler
+    del eval_dataloader
 
-<<<<<<< HEAD
     #check_memory(desc="End of eval func")
 
-    
-=======
->>>>>>> 11966712dd70ce543edb7c5a08bfa291f389d3d5
     return result
 
 
