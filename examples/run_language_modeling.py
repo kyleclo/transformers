@@ -103,7 +103,7 @@ class TextDataset(Dataset):
                 batch_of_lines = []
                 while True:
                     # read
-                    for _ in range(100000):
+                    for _ in tqdm(range(100000)):
                         line = f.next().strip()
                         # skip empty
                         if not line:
