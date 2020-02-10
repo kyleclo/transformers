@@ -86,6 +86,13 @@ def main():
         help="The model checkpoint for weights initialization. Leave None if you want to train a model from scratch.",
     )
 
+    parser.add_argument(
+        "--mlm", action="store_true", help="Train with masked-language modeling loss instead of language modeling."
+    )
+    parser.add_argument(
+        "--mlm_probability", type=float, default=0.15, help="Ratio of tokens to mask for masked language modeling loss"
+    )
+
     parser.add_argument("--per_gpu_eval_batch_size", default=4, type=int, help="Batch size per GPU/CPU for evaluation.")
 
     parser.add_argument(
