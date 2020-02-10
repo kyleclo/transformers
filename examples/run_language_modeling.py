@@ -91,7 +91,7 @@ class TextDataset(Dataset):
             directory, args.model_type + "_cached_lm_" + str(block_size) + "_" + filename
         )
 
-        if os.path.exists(cached_features_file) and not args.overwrite_cache:
+        if not args.no_cache and os.path.exists(cached_features_file) and not args.overwrite_cache:
             logger.info("Loading features from cached file %s", cached_features_file)
             with open(cached_features_file, "rb") as handle:
                 self.examples = pickle.load(handle)
@@ -100,17 +100,27 @@ class TextDataset(Dataset):
 
             self.examples = []
             with open(file_path, encoding="utf-8") as f:
-                # TODO: reads entire thing into memory; might not fit; if so, do streaming & ignore caching
-                text = f.read()
+                batch_of_lines = []
+                while True:
+                    # read
+                    for _ in range(100000):
+                        line = f.next().strip()
+                        # skip empty
+                        if not line:
+                            continue
+                        batch_of_lines.append(line)
 
-            tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text))
+                    # tokenize
+                    tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('\n'.join(batch_of_lines)))
+                    for i in range(0, len(tokenized_text) - block_size + 1, block_size):  # Truncate in block of block_size
+                        self.examples.append(tokenizer.build_inputs_with_special_tokens(tokenized_text[i : i + block_size]))
 
-            for i in range(0, len(tokenized_text) - block_size + 1, block_size):  # Truncate in block of block_size
-                # TODO: always truncates from the front
-                self.examples.append(tokenizer.build_inputs_with_special_tokens(tokenized_text[i : i + block_size]))
-            # Note that we are loosing the last truncated example here for the sake of simplicity (no padding)
-            # If your dataset is small, first you should loook for a bigger one :-) and second you
-            # can change this behavior by adding (model specific) padding.
+                    # check EOF
+                    if len(batch_of_lines) < 100000:
+                        break
+
+                    # reset
+                    batch_of_lines = []
 
             if not args.no_cache:
                 logger.info("Saving features into cached file %s", cached_features_file)
