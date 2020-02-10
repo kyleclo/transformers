@@ -53,7 +53,7 @@ from transformers import (
 logger = logging.getLogger(__name__)
 
 
-from examples.run_language_modeling import MODEL_CLASSES, TextDataset, LineByLineTextDataset, load_and_cache_examples, \
+from run_language_modeling import MODEL_CLASSES, TextDataset, LineByLineTextDataset, load_and_cache_examples, \
     set_seed, evaluate
 
 def main():
