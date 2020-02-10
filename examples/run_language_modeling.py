@@ -104,7 +104,7 @@ class TextDataset(Dataset):
                 while True:
                     # read
                     for _ in tqdm(range(100000)):
-                        line = f.next().strip()
+                        line = next(f).strip()
                         # skip empty
                         if not line:
                             continue
