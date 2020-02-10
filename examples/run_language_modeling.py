@@ -112,9 +112,10 @@ class TextDataset(Dataset):
             # If your dataset is small, first you should loook for a bigger one :-) and second you
             # can change this behavior by adding (model specific) padding.
 
-            logger.info("Saving features into cached file %s", cached_features_file)
-            with open(cached_features_file, "wb") as handle:
-                pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            if not args.no_cache:
+                logger.info("Saving features into cached file %s", cached_features_file)
+                with open(cached_features_file, "wb") as handle:
+                    pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
     def __len__(self):
         return len(self.examples)
@@ -578,12 +579,9 @@ def main():
         help="Evaluate all checkpoints starting with the same prefix as model_name_or_path ending and ending with step number",
     )
     parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
-    parser.add_argument(
-        "--overwrite_output_dir", action="store_true", help="Overwrite the content of the output directory"
-    )
-    parser.add_argument(
-        "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
-    )
+    parser.add_argument("--overwrite_output_dir", action="store_true", help="Overwrite the content of the output directory")
+    parser.add_argument("--no_cache", action="store_true", help="Turn off caching (useful when Train set is too big)")
+    parser.add_argument("--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets")
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
 
     parser.add_argument(
@@ -752,26 +750,6 @@ def main():
         model = model_class.from_pretrained(args.output_dir)
         tokenizer = tokenizer_class.from_pretrained(args.output_dir)
         model.to(args.device)
-
-    # Evaluation
-    results = {}
-    if args.do_eval and args.local_rank in [-1, 0]:
-        checkpoints = [args.output_dir]
-        if args.eval_all_checkpoints:
-            checkpoints = list(os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True)))
-            logging.getLogger("transformers.modeling_utils").setLevel(logging.WARN)  # Reduce logging
-        logger.info("Evaluate the following checkpoints: %s", checkpoints)
-        for checkpoint in checkpoints:
-            global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-            prefix = checkpoint.split("/")[-1] if checkpoint.find("checkpoint") != -1 else ""
-
-            model = model_class.from_pretrained(checkpoint)
-            model.to(args.device)
-            result = evaluate(args, model, tokenizer, prefix=prefix)
-            result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
-            results.update(result)
-
-    return results
 
 
 if __name__ == "__main__":
