@@ -101,23 +101,23 @@ class TextDataset(Dataset):
             self.examples = []
             with open(file_path, encoding="utf-8") as f:
                 batch_of_lines = []
-                while True:
+                is_eof = False
+                while not is_eof:
                     # read
-                    for _ in tqdm(range(100000)):
-                        line = next(f).strip()
-                        # skip empty
-                        if not line:
-                            continue
-                        batch_of_lines.append(line)
+                    try:
+                        for _ in tqdm(range(100000)):
+                            line = next(f).strip()
+                            # skip empty
+                            if not line:
+                                continue
+                            batch_of_lines.append(line)
+                    except StopIteration:
+                        is_eof = True
 
                     # tokenize
                     tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('\n'.join(batch_of_lines)))
                     for i in range(0, len(tokenized_text) - block_size + 1, block_size):  # Truncate in block of block_size
                         self.examples.append(tokenizer.build_inputs_with_special_tokens(tokenized_text[i : i + block_size]))
-
-                    # check EOF
-                    if len(batch_of_lines) < 100000:
-                        break
 
                     # reset
                     batch_of_lines = []
