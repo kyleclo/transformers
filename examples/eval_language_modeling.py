@@ -93,6 +93,10 @@ def main():
         action="store_true",
         help="Evaluate all checkpoints starting with the same prefix as model_name_or_path ending and ending with step number",
     )
+    parser.add_argument(
+        "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
+    )
+
     parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
     parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
 
