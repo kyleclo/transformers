@@ -111,7 +111,11 @@ class LineByLineTextDataset(Dataset):
         self.examples = []
         with open(cached_features_file, 'r') as f_in:
             for line in tqdm(f_in):
-                self.examples.append(json.loads(line))
+                example = json.loads(line)
+                # TODO: this is necessary because train() fails if the sequence is 1 word (cant do next-word prediction)
+                # TODO: to skip uninteresting sequences, let's skip everything that's fewer than 5 words
+                if len(example) > 5:
+                    self.examples.append(example)
 
     def __len__(self):
         return len(self.examples)
