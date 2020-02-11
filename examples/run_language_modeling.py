@@ -89,7 +89,7 @@ class TextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
 
-        cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
+        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
         if not os.path.exists(cached_features_file):
             raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
@@ -113,7 +113,7 @@ class LineByLineTextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
 
-        cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
+        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
         if not os.path.exists(cached_features_file):
             raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
