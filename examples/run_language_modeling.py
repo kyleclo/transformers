@@ -573,6 +573,7 @@ def main():
         help="If > 0: set total number of training steps to perform. Override num_train_epochs.",
     )
     parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
+    parser.add_argument("--warmup_pct", default=0.0, type=float, help="Linear warmup over warmup_steps.")
 
     parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")
     parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
@@ -679,6 +680,9 @@ def main():
 
     # Set seed
     set_seed(args)
+
+    # custom
+    args.warmup_steps = args.warmup_pct * args.max_steps
 
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
