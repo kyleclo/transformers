@@ -226,6 +226,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
+    model.resize_token_embeddings(len(tokenizer))
+
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
     def collate(examples: List[torch.Tensor]):
