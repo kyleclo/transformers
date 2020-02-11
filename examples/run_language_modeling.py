@@ -37,6 +37,8 @@ from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampl
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+import json
+
 from transformers import (
     WEIGHTS_NAME,
     AdamW,
@@ -85,47 +87,7 @@ MODEL_CLASSES = {
 
 class TextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
-        assert os.path.isfile(file_path)
-        directory, filename = os.path.split(file_path)
-        cached_features_file = os.path.join(
-            directory, args.model_type + "_cached_lm_" + str(block_size) + "_" + filename
-        )
-
-        if not args.no_cache and os.path.exists(cached_features_file) and not args.overwrite_cache:
-            logger.info("Loading features from cached file %s", cached_features_file)
-            with open(cached_features_file, "rb") as handle:
-                self.examples = pickle.load(handle)
-        else:
-            logger.info("Creating features from dataset file at %s", directory)
-
-            self.examples = []
-            with open(file_path, encoding="utf-8") as f:
-                batch_of_lines = []
-                is_eof = False
-                while not is_eof:
-                    # read
-                    try:
-                        for _ in tqdm(range(100000)):
-                            line = next(f).strip()
-                            # skip empty
-                            if not line:
-                                continue
-                            batch_of_lines.append(line)
-                    except StopIteration:
-                        is_eof = True
-
-                    # tokenize
-                    tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize('\n'.join(batch_of_lines)))
-                    for i in range(0, len(tokenized_text) - block_size + 1, block_size):  # Truncate in block of block_size
-                        self.examples.append(tokenizer.build_inputs_with_special_tokens(tokenized_text[i : i + block_size]))
-
-                    # reset
-                    batch_of_lines = []
-
-            if not args.no_cache:
-                logger.info("Saving features into cached file %s", cached_features_file)
-                with open(cached_features_file, "wb") as handle:
-                    pickle.dump(self.examples, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        raise NotImplementedError('Use LineByLine for scigpt')
 
     def __len__(self):
         return len(self.examples)
@@ -142,11 +104,14 @@ class LineByLineTextDataset(Dataset):
         # `tokenizers` repo everywhere =)
         logger.info("Creating features from dataset file at %s", file_path)
 
-        with open(file_path, encoding="utf-8") as f:
-            # TODO: reads entire thing into memory; might not fit; if so, do streaming & ignore caching
-            lines = [line for line in f.read().splitlines() if len(line) > 0]
+        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
+        if not os.path.exists(cached_features_file):
+            raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
-        self.examples = tokenizer.batch_encode_plus(lines, max_length=block_size)["input_ids"]
+        self.examples = []
+        with open(cached_features_file, 'r') as f_in:
+            for line in tqdm(f_in):
+                self.examples.append(json.loads(line))
 
     def __len__(self):
         return len(self.examples)
