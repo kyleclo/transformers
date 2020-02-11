@@ -91,10 +91,13 @@ if __name__ == '__main__':
 
     args.block_size = tokenizer.max_len_single_sentence
 
+    assert os.path.isfile(args.data_file)
+    logger.info("Creating features from dataset file at %s", args.data_file)
+
+    style = 'linebyline' if args.line_by_line else 'standard'
+    cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
 
     if args.line_by_line:
-        assert os.path.isfile(args.data_file)
-        logger.info("Creating features from dataset file at %s", args.data_file)
 
         with open(args.data_file, encoding="utf-8") as f:
             lines = [line.strip() for line in tqdm(f) if line.strip()]
@@ -106,10 +109,17 @@ if __name__ == '__main__':
         with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as p:
             tokenized_liness = p.map(_mp_tokenize_line, lines)
 
-        cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
         with open(cached_features_file, 'w') as f_out:
             for tokenized_lines in tqdm(tokenized_liness):
                 for tokenized_line in tokenized_lines:
                     json.dump(tokenized_line, f_out)
                     f_out.write('\n')
 
+    else:
+        with open(args.data_file, encoding="utf-8") as f:
+            text = f.read()
+        tokenized_text = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(text))
+        with open(cached_features_file, 'w') as f_out:
+            for i in range(0, len(tokenized_text)-args.block_size+1, args.block_size): # Truncate in block of block_size
+                json.dump(tokenizer.build_inputs_with_special_tokens(tokenized_text[i:i+args.block_size]), f_out)
+                f_out.write('\n')
