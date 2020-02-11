@@ -261,8 +261,8 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     # Train!
     logger.info("***** Running training *****")
-    num_gpus = torch.distributed.get_world_size()
-    true_effective_batch_size = args.per_gpu_train_batch_size * args.gradient_accumulation_steps * (num_gpus if args.local_rank != -1 else 1)
+    num_gpus = torch.distributed.get_world_size() if args.local_rank != -1 else 1
+    true_effective_batch_size = args.per_gpu_train_batch_size * args.gradient_accumulation_steps * num_gpus
     logger.info(f"""
        With {num_gpus} GPUs (each fitting {args.per_gpu_train_batch_size} instances per GPU)
        and gradient accumulation of {args.gradient_accumulation_steps}, we have a
