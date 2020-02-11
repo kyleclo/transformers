@@ -87,7 +87,20 @@ MODEL_CLASSES = {
 
 class TextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
-        raise NotImplementedError('Use LineByLine for scigpt')
+        assert os.path.isfile(file_path)
+
+        cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
+        if not os.path.exists(cached_features_file):
+            raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
+
+        self.examples = []
+        with open(cached_features_file, 'r') as f_in:
+            for line in tqdm(f_in):
+                example = json.loads(line)
+                # TODO: this is necessary because train() fails if the sequence is 1 word (cant do next-word prediction)
+                # TODO: to skip uninteresting sequences, let's skip everything that's fewer than 5 words
+                if len(example) > 5:
+                    self.examples.append(example)
 
     def __len__(self):
         return len(self.examples)
@@ -99,12 +112,8 @@ class TextDataset(Dataset):
 class LineByLineTextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
-        # Here, we do not cache the features, operating under the assumption
-        # that we will soon use fast multithreaded tokenizers from the
-        # `tokenizers` repo everywhere =)
-        logger.info("Creating features from dataset file at %s", file_path)
 
-        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
+        cached_features_file = os.path.join(os.path.dirname(args.data_file), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(args.data_file).replace('.txt', '.json'))
         if not os.path.exists(cached_features_file):
             raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
