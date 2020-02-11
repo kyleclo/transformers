@@ -89,7 +89,7 @@ class TextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
 
-        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
+        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{args.cache_data_file_style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
         if not os.path.exists(cached_features_file):
             raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
@@ -113,7 +113,7 @@ class LineByLineTextDataset(Dataset):
     def __init__(self, tokenizer: PreTrainedTokenizer, args, file_path: str, block_size=512):
         assert os.path.isfile(file_path)
 
-        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
+        cached_features_file = os.path.join(os.path.dirname(file_path), args.model_type + f'_{args.cache_data_file_style}_' + "_cached_lm_" + str(args.block_size) + "_" + os.path.basename(file_path).replace('.txt', '.json'))
         if not os.path.exists(cached_features_file):
             raise FileNotFoundError('Make sure to run `create_cache_line_by_line_multiprocess.py` first to create cached features file')
 
@@ -469,6 +469,9 @@ def main():
 
     # Required parameters
     parser.add_argument("--train_data_file", default=None, type=str, required=True, help="The input training data file (a text file).")
+
+    parser.add_argument("--cache_data_file_style", default=None, type=str, required=True, help="either called 'standard' or 'linebyline'")
+
     parser.add_argument("--output_dir", type=str, required=True, help="The output directory where the model predictions and checkpoints will be written.",)
     parser.add_argument(
         "--model_type", type=str, required=True, help="The model architecture to be trained or fine-tuned.",
